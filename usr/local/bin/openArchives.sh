@@ -1,26 +1,38 @@
 #!/bin/bash
 
-checked=0
+has_password=-2
 password=""
 
 check_password_protected()
 {
-	(7z t -p'' "$1" &>/dev/null)
+	# Test the file and inmediately stop it,
+	# because there's no better way to check if the file
+	# is password protected
+	7z t "$1" &>/tmp/7zout &
+	sleep 0.1 && kill -9 "$!" &>/dev/null
+	wait "$!" &>/dev/null
+	grep "Enter password" /tmp/7zout &> /dev/null
 	has_password=$?
-	if [ "$has_password" -eq 2 ]; then
+	rm -f /tmp/7zout
+
+	if [ "$has_password" -eq 0 ]; then
 		echo "At least one of the files seems to be password protected."\
-			 "Do you want to try using the same password on all files?"
-		while true; do
-			read -n 1 -p "[Y/N]" yn
-			case $yn in
-				[yY] ) checked=1;
-					echo "" && read -p "Enter the password to use: " password;
-					break;;
-				[nN] ) checked=1;
-					break;;
-				* ) echo "" && echo "Please enter [Y]es or [N]o";;
-			esac
-		done
+			"Do you want to try using the same password on all files?"
+					exec 8<&0
+					while true; do
+						read -n 1 -u 8 -p "[Y/N]" yn
+						case $yn in
+							[yY] )
+								echo "" && read -r -u 8 -p "Enter the password to use: " password;
+								break;;
+							[nN] )
+								break;;
+							* ) echo "" && echo "Please enter [Y]es or [N]o";;
+						esac
+					done
+					exec 8<&-
+				else
+					has_password=-2
 	fi
 }
 
@@ -28,20 +40,26 @@ while getopts ":el:" option; do
 	case $option in
 		e) # Extract
 			for file in "${@:2}"; do
-				DIR=`rev <<< "$file" | cut -d"/" -f2- | rev`
-				NAME=`rev <<< "$file" | cut -d"." -f2- | cut --complement -d"/" -f2- | rev`
-				if [ "$NAME" = "" ]; then
-					NAME=`rev <<< "$file" | cut --complement -d"/" -f2- | rev`
+				absolute_file_path="$(readlink -f "$file")"
+				if [ $has_password -eq -2 ];then
+					check_password_protected "$absolute_file_path"
+				else
+					break
 				fi
+			done
 
-				if [ $checked -eq 0 ];then
-					check_password_protected "$file"
+			for file in "${@:2}"; do
+				absolute_file_path="$(readlink -f "$file")"
+				DIR=$(rev <<< "$absolute_file_path" | cut -d"/" -f2- | rev)
+				NAME=$(rev <<< "$absolute_file_path" | cut -d"." -f2- | cut --complement -d"/" -f2- | rev)
+				if [[ "$NAME" = "" ]]; then
+					NAME=$(rev <<< "$absolute_file_path" | cut --complement -d"/" -f2- | rev)
 				fi
 
 				if [ "$password" = "" ]; then
-					7z x -o"$DIR"/"$NAME" "$file"
+					7z x -ba -o"$DIR"/"$NAME" "$absolute_file_path"
 				else
-					7z x -p"$password" -o"$DIR"/"$NAME" "$file"
+					7z x -ba -p"$password" -o"$DIR"/"$NAME" "$absolute_file_path"
 				fi
 			done
 			exit;;
@@ -50,7 +68,7 @@ while getopts ":el:" option; do
 			for file in "${@:2}"; do
 				7z l "$file"
 				echo ""
-				read -p "Press ENTER to continue" input
+				read -n 1 -r -p "Press any key to continue" input
 			done
 			exit;;
 
